@@ -1,13 +1,12 @@
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "./dram.h"
+
+//const unsigned int DRAM_SIZE = 1024 * 1024 * 128; //(1024 bytes in a kibibytes) * (1024 kbibytes in a mibibyte) * 128 MiB
 const unsigned int DRAM_SIZE = 1024 * 1024 * 128; //(1024 bytes in a kibibytes) * (1024 kbibytes in a mibibyte) * 128 MiB
 
 //our DRAM has a size of 128 MiB
-typedef struct DRAM{
-    uint8_t *dram; //program will be stored on the heap
-} DRAM;
 
 //given the bytes from the .elf file, place it at the beginning of DRAM
 //this function will (check to make sure this is true) be called when initalizing DRAM by the main program
