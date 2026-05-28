@@ -14,7 +14,7 @@ typedef struct{
 void dump_regs(cpu *CPU){
     uint32_t sizeOfArray = sizeof(CPU->regs) / sizeof(CPU->regs[0]);
     printf("=================== REGISTERS DUMP ====================\n\n");
-    for(int i = 0; i < sizeOfArray; i++){
+    for(uint32_t i = 0; i < sizeOfArray; i++){
         printf("Reg %d: %lx\n", i, CPU->regs[i]);
     }
 }
