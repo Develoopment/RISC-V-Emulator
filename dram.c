@@ -16,86 +16,87 @@ DRAM InitDRAM(uint8_t *program, uint32_t sizeOfProgram) { //takes in the .elf fi
     //allocate space
     uint8_t *dramPointer = calloc(DRAM_SIZE, sizeof(uint8_t));
     if(dramPointer == NULL){
-        printf("[Err]: No space on the heap. DRAM could not be initalized");
+        printf("[Err]: No space on the heap. DRAM could not be initalized\n");
         return dramObj;
     }
 
     dramObj.dram = dramPointer;
-    printf("> DRAM INITALIZED WITH %u bytes OF MEMORY ON THE HEAP", DRAM_SIZE);
+    printf("> DRAM INITALIZED WITH %u bytes OF MEMORY ON THE HEAP\n", DRAM_SIZE);
 
     //read the program from the elf file and splice it into DRAM
     //!WE ARE AGREEING TO OURSELVES THAT THE ELF BINARY AND HENCE THE PROGRAM WILL START AT X0000 SO I AM LOADING THE BINARY THERE
     //copying over binary into DRAM
     //ERROR CHECKING
     if(sizeOfProgram > DRAM_SIZE){
-        printf("[Err]: Program larger than 128MiB, program is larger than DRAM capacity");
+        printf("[Err]: Program larger than 128MiB, program is larger than DRAM capacity\n");
         free(dramPointer);
         dramObj.dram = NULL;
         return dramObj;
     }else if(sizeOfProgram == 0){
-        printf("[WARNING]: Program has a size of 0. Program is empty");
+        printf("[WARNING]: Program has a size of 0. Program is empty\n");
     }
 
     for(uint32_t i = 0; i < sizeOfProgram; i++){
         dramObj.dram[i] = program[i];
     }
 
-    printf("> GIVEN BINARY SUCCESSFULLY COPIED INTO DRAM");
+    printf("> GIVEN BINARY SUCCESSFULLY COPIED INTO DRAM\n");
     return dramObj;
 }
 
-void DeinitDRAM(DRAM dramPointer){
-    free(dramPointer.dram);
+void DeinitDRAM(DRAM dramObj){
+    free(dramObj.dram);
+    printf("> DRAM SUCCESSFULLY Uninitialized\n");
 }
 
 //address is the size is where in the DRAM the access is happening, and size can either be 8, 16, 32, or 64
 
 //the int size of address needs to be big enough to access each byte of the (1024*1024*128 bytes) which needs atleast 27 bits to represent this, but to be safe we are using 64 bits
-uint64_t load(DRAM *dramPointer, uint64_t address, uint8_t size){
+uint64_t DRAMload(DRAM dramObj, uint64_t address, uint8_t size){
     
     uint8_t iteratorSize = size/8;
     uint64_t returnVal = 0;
 
     //error checks
     if(size > 64 || (size%8 != 0)){
-        printf("[Err]: invalid size for load command. Load not successful");
+        printf("[Err]: invalid size for load command. Load not successful\n");
         return 0;
     }
     //boundary check
     if(address+iteratorSize > DRAM_SIZE){
-        printf("[Err]: attempting to access memory greater than DRAM capacity. Load could not be completed.");
+        printf("[Err]: attempting to access memory greater than DRAM capacity. Load could not be completed.\n");
         return 0;
     }
 
     for(uint8_t i = 0; i < iteratorSize; i++){
-        returnVal |= ((uint64_t)dramPointer->dram[address+i] << (i*8));
+        returnVal |= ((uint64_t)dramObj.dram[address+i] << (i*8));
     }
 
     //!remember that items in memory are stored in little endian form
-    printf("> LOAD COMMAND FOR %d bytes AT MEM ADDRESSS: %lx SUCCESSFUL", size, address);
+    printf("> LOAD COMMAND FOR %d bytes AT MEM ADDRESSS: %lx SUCCESSFUL\n", size, address);
     return returnVal;
 }
 
-void store(DRAM *dramPointer, uint64_t address, uint8_t size, uint64_t val){
+void DRAMstore(DRAM dramObj, uint64_t address, uint8_t size, uint64_t val){
     //!remember that items in memory are stored in little endian form
     uint8_t iteratorSize = size/8;
 
     if(size > 64 || (size%8 != 0)){
-        printf("[Err]: Invalid size of value. Store could not be completed");
+        printf("[Err]: Invalid size of value. Store could not be completed\n");
         return;
     }
     if(address+iteratorSize > DRAM_SIZE){
-        printf("[Err]: attempting to access memory greater than DRAM capacity. Store could not be completed.");
+        printf("[Err]: attempting to access memory greater than DRAM capacity. Store could not be completed.\n");
     }
 
 
-    for(int i = 0; i < iteratorSize; i++){
+    for(uint8_t i = 0; i < iteratorSize; i++){
         //get LSB
         uint8_t storeVal = (uint8_t)(val >> (i*8));
         //store at lower address
-        dramPointer->dram[address+i] = storeVal;
+        dramObj.dram[address+i] = storeVal;
     }
     
 
-    printf("> STORE COMMAND FOR VALUE %lx AT MEM ADDRESSS: %lx SUCCESSFUL", val, address);
+    printf("> STORE COMMAND FOR VALUE %lx AT MEM ADDRESSS: %lx SUCCESSFUL\n", val, address);
 }

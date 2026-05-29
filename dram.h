@@ -14,8 +14,8 @@ typedef struct DRAM{
 
 //Function Prototypes
 DRAM InitDRAM(uint8_t *program, uint32_t sizeOfProgram);
-void DeinitDRAM(DRAM dramPointer);
-uint64_t load(DRAM *dramPointer, uint64_t address, uint8_t size);
-void store(DRAM *dramPointer, uint64_t address, uint8_t size, uint64_t val);
+void DeinitDRAM(DRAM dramObj);
+uint64_t DRAMload(DRAM dramObj, uint64_t address, uint8_t size);
+void DRAMstore(DRAM dramObj, uint64_t address, uint8_t size, uint64_t val);
 
 #endif
