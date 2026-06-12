@@ -6,6 +6,10 @@
 #include <string.h>
 #include <elf.h>
 
+#define SIE 0x104
+#define MIE 0x304
+#define MIDELEG 0x303
+
 //this struct holds the STATE of the CPU
 //1. State declaration
 typedef struct{
@@ -14,9 +18,28 @@ typedef struct{
 
     //replaced memory member with bus member
     BUS bus;
+
+    uint64_t csrs[4096]; //csrs are their own register file and manage switching between supervisor and user mode
 }cpu;
 
 //helper functions
+uint64_t load_csr(cpu *CPU, uint16_t csr_address){
+    if(csr_address == SIE){
+        return CPU->csrs[MIE] & CPU->csrs[MIDELEG]; //if the csr we want to get is SIE, we need to get the MIE and mask it with MIDELEG which is another register that tells the program what bits the supervisor mode can see
+    }else{
+        return CPU->csrs[csr_address];
+    }
+}
+
+void store_csr(cpu *CPU, uint16_t csr_address, uint64_t value){
+    if(csr_address == SIE){
+        CPU->csrs[MIE] = (CPU->csrs[MIE] & ~CPU->csrs[MIDELEG]) | (value & CPU->csrs[MIDELEG]);
+        //this bitwise operation clears out bits that can be enabled by supervisor mode and then the other part lets only those bits to be written to the MIE register
+    }else{
+        CPU->csrs[csr_address] = value; 
+    }
+}
+
 void dump_regs(cpu *CPU){
     uint32_t sizeOfArray = sizeof(CPU->regs) / sizeof(CPU->regs[0]);
     printf("=================== REGISTERS DUMP ====================\n\n");
@@ -127,7 +150,145 @@ int main(){
             
             break; 
         }
+
+        //CSR operations as per ZICSR Extension
+        case 0x73:{
+
+            uint16_t CSRInstruction = (instruction & ((uint16_t)(0b111) << 12)) >> 12;
+            printf("> CSR type instruction found");
+
+            switch (CSRInstruction){
+                case 0x01:{
+                    //CSRRW - writes old value of CSR into Rd, and value from rs1 to the CSR.
+                    //if rd is 0 though, rs1 is written into CSR but nothing is written into Rd
+                    uint16_t rd = (uint16_t)((instruction & ((uint16_t)0b11111 << 7)) >> 7);
+                    uint16_t rs1 = (uint16_t)((instruction & ((uint16_t)0b11111 << 15)) >> 15);
+                    uint16_t csr = (uint16_t)((instruction & ((uint16_t)0b111111111111 << 20)) >> 20);
+                    
+                    if(rd != 0){
+                        //as long as rd is not 0, then put CSR value into Rd
+                        CPU.regs[rd] = load_csr(&CPU, csr);
+                        printf("> Old CSR: %d value read and stored into reg: %d\n", csr, rd);
+                    }
+
+                    //then put value from rs1 into csr
+                    store_csr(&CPU, csr, CPU.regs[rs1]);
+                    printf("> New CSR value stored from reg: %d into CSR: %d\n", rs1, csr);
+                    printf("> CSRRW instruction completed\n");
+                    break;
+                }
+
+                case 0x05:{
+                    //CSRRWI
+                    uint16_t rd = (uint16_t)((instruction & ((uint16_t)0b11111 << 7)) >> 7);
+                    uint16_t imm = (uint16_t)((instruction & ((uint16_t)0b11111 << 15)) >> 15);
+                    uint16_t csr = (uint16_t)((instruction & ((uint16_t)0b111111111111 << 20)) >> 20);
+                    
+                    if(rd != 0){
+                        //as long as rd is not 0, then put CSR value into Rd
+                        CPU.regs[rd] = load_csr(&CPU, csr);
+                        printf("> Old CSR: %d value read and stored into reg: %d\n", csr, rd);
+                    }
+
+                    store_csr(&CPU, csr, imm);
+                    printf("> New CSR value: %d into CSR: %d\n", imm, csr);
+                    printf("> CSRRWI instruction completed\n");
+                    break;
+                }
+
+                case 0x02:{
+                    //CSRRS: writes old CSR value into rd, and then rs1 is treated as a bit mask that sets the bits in the CSR (if that bit is writable - SIE taken care by the helper functions)
+                    uint16_t rd = (uint16_t)((instruction & ((uint16_t)0b11111 << 7)) >> 7);
+                    uint16_t rs1 = (uint16_t)((instruction & ((uint16_t)0b11111 << 15)) >> 15);
+                    uint16_t csr = (uint16_t)((instruction & ((uint16_t)0b111111111111 << 20)) >> 20);
+                    
+                    uint64_t oldcsrvalue = load_csr(&CPU, csr);
+
+                    if(rd != 0){//ensures the 0 register that ISA declares to be always just 0 stays that way
+                        CPU.regs[rd] = oldcsrvalue;
+                    }
+
+                    if(rs1 != 0){//ISA specifies that if rs1, then no write happens
+                        uint64_t newcsrvalue = oldcsrvalue | CPU.regs[rs1];
+                        store_csr(&CPU, csr, newcsrvalue);
+                    }
+
+                    printf("> New CSR value SET based on reg: %d at CSR: %d\n", rs1, csr);
+                    printf("> CSRRS instruction completed\n");
+                    break;
+                }
+
+                case 0x06:{//CSRRSI
+                    uint16_t rd = (uint16_t)((instruction & ((uint16_t)0b11111 << 7)) >> 7);
+                    uint16_t imm = (uint16_t)((instruction & ((uint16_t)0b11111 << 15)) >> 15);
+                    uint16_t csr = (uint16_t)((instruction & ((uint16_t)0b111111111111 << 20)) >> 20);
+                    
+                    uint64_t oldcsrvalue = load_csr(&CPU, csr);
+                    if(rd != 0){//ensures the 0 register that ISA declares to be always just 0 stays that way
+                        CPU.regs[rd] = oldcsrvalue;
+                    }
+
+                    if(imm != 0){//ISA specifies that if rs1, then no write happens
+                        uint64_t newcsrvalue = oldcsrvalue | imm;
+                        store_csr(&CPU, csr, newcsrvalue);
+                    }
+
+                    printf("> New CSR value SET based on value: %d at CSR: %d\n", imm, csr);
+                    printf("> CSRRSI instruction completed\n");
+                    break;
+                }
+
+                case 0x03:{
+                    //CSRRC: writes old CSR value into rd and then rs1 bit mask clears the csr value bits if it can be set
+                    uint16_t rd = (uint16_t)((instruction & ((uint16_t)0b11111 << 7)) >> 7);
+                    uint16_t rs1 = (uint16_t)((instruction & ((uint16_t)0b11111 << 15)) >> 15);
+                    uint16_t csr = (uint16_t)((instruction & ((uint16_t)0b111111111111 << 20)) >> 20);
+                    
+                    uint64_t oldcsrvalue = load_csr(&CPU, csr);
+                    if(rd != 0){//ensures the 0 register that ISA declares to be always just 0 stays that way
+                        CPU.regs[rd] = oldcsrvalue;
+                    }
+
+                    if(rs1 != 0){//ISA specifies that if rs1, then no write happens
+                        uint64_t newcsrvalue = oldcsrvalue & ~(CPU.regs[rs1]);
+                        store_csr(&CPU, csr, newcsrvalue);
+                    }
+                    
+                    printf("> New CSR value CLEARED based on bitmask at reg: %d at CSR: %d\n", rs1, csr);
+                    printf("> CSRRC instruction completed\n");
+                    break;
+                }
+                
+                case 0x07:{//CSRRCI
+                    uint16_t rd = (uint16_t)((instruction & ((uint16_t)0b11111 << 7)) >> 7);
+                    uint16_t imm = (uint16_t)((instruction & ((uint16_t)0b11111 << 15)) >> 15);
+                    uint16_t csr = (uint16_t)((instruction & ((uint16_t)0b111111111111 << 20)) >> 20);
+                    
+                    uint64_t oldcsrvalue = load_csr(&CPU, csr);
+                    if(rd != 0){//ensures the 0 register that ISA declares to be always just 0 stays that way
+                        CPU.regs[rd] = oldcsrvalue;
+                    }
+
+                    if(imm != 0){
+                        uint64_t newcsrvalue = oldcsrvalue & ~imm;
+                        store_csr(&CPU, csr, newcsrvalue);
+                    }
+
+                    printf("> New CSR value CLEARED based on value: %d at CSR: %d\n", imm, csr);
+                    printf("> CSRRCI instruction completed\n");
+                    break;
+                }
+
+                default:{
+                    printf("[Err]: CSR modificaiton instruction found, but actual funciton (CSRRW, CSRRI etc) not recognized\n");
+                    break;
+                }
+            }
+
+            break;
+        }
         
+
         default:{
             printf("[Err]: I-type operation NOT IMPLEMENTED YET\n");
             break;
