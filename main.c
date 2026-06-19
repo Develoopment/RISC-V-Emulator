@@ -44,7 +44,7 @@ void dump_regs(cpu *CPU){
     uint32_t sizeOfArray = sizeof(CPU->regs) / sizeof(CPU->regs[0]);
     printf("=================== REGISTERS DUMP ====================\n\n");
     for(uint32_t i = 0; i < sizeOfArray; i++){
-        printf("Reg %d: %lx\n", i, CPU->regs[i]);
+        printf("Reg %d: %lx (%d)\n", i, CPU->regs[i], CPU->regs[i]);
     }
 }
 
@@ -99,12 +99,15 @@ int main(){
     CPU.regs[2] = 256; //letting it point to the last memory cell, since stack grows downward, any nonzero value here would work
 
     //------TESTING PARSING FROM A CUSTOM ASM FILE------//
-    CPU.regs[5] = 3;
-    CPU.regs[6] = 5;
+    uint64_t prevPC = 0; //REMOVE AFTER IMPLEMENTING ECALL
+
+    //to show regs state before the program
+    printf("***Initial State of Registers:***\n");
+    dump_regs(&CPU);
 
     //4. Instruction Cycle (managed by the FSM in the datapath)
     //the instruction cycle is composed of: fetch instruction, decode instruction, eval address, fetch operands, execute, store value
-    while(CPU.PC < 10){//will need to change this
+    while(1){//will need to change this
 
         //FETCH INSTRUCTION
         //changed fetch instruction to load it from the parsed elf file
@@ -120,6 +123,58 @@ int main(){
         //! Opcodes in RISC V specify what format type the instruction is in, other bits then specify what operation is actually being performed (i.e. ADD, AND, etc)
         switch (opcode)
         {
+
+        case 0x03:{//LD RV64I
+            
+            uint8_t operation = (instruction & ((uint64_t)0b111 << 12)) >> 12;
+
+            switch (operation)
+            {
+            case 0x03:
+                
+                uint8_t rd = (instruction & ((uint64_t)0b11111 << 7)) >> 7;
+                uint8_t rs1 = (instruction & ((uint64_t)0b11111 << 15)) >> 15;
+                int64_t offset = (int64_t)((int32_t)instruction >> 20); 
+                //cant do (int64_t)instruction >> 20; because instruction is unsigned 32 bit value, any casting to a higher bit value will zero extend it including int64_t will zero extend it. We must first cast it into int32_t to ensure negative values are extended correctly.
+                //this is a int64_t type. signed because offset can point to memory before or after the address in rs1. 64 bit because the value in rs1 is 64 bit and because we need to sign extend the signed immediate value to 64 bits before adding it to the base.
+                
+                CPU.regs[rd] = BusLoad(CPU.bus, CPU.regs[rs1] + offset, 64);
+                printf("> Loaded 64 bit value from DRAM into reg: %d\n", rd);
+
+                break;
+            
+            default:
+                printf("[Err]: RV64I Load type instruction? not implemented yet\n");
+                break;
+            }
+
+            break;
+        }
+        
+        case 0x23:{//SD RV64I
+            uint8_t operation = (instruction & ((uint64_t)0b111 << 12)) >> 12;
+
+            switch (operation)
+            {
+            case 0x03:
+                
+                uint8_t srcreg = (instruction & ((uint64_t)0b11111 << 20)) >> 20;
+                uint8_t basereg = (instruction & ((uint64_t)0b11111 << 15)) >> 15;
+                int64_t offset =  (((int32_t)instruction >> 20) & ~0x1FLL) | ((instruction >> 7) & 0x1F);
+                
+                BusStore(CPU.bus, CPU.regs[basereg] + offset, 64, CPU.regs[srcreg]);
+                printf("> Stored 64 bit value into DRAM from reg: %d\n", srcreg);
+
+                break;
+            
+            default:
+                printf("[Err]: RV64I Store type instruction? not implemented yet\n");
+                break;
+            }
+
+            break;
+        }
+
         case 0x33:{ //R Types
 
             //get the 3 bit differentiator
@@ -137,6 +192,16 @@ int main(){
                     break;
                 }
 
+                case 0x07:{ //AND
+                    uint8_t rd = (instruction & (0b11111 << 7)) >> 7;
+                    uint8_t rs1 = (instruction & (0b11111 << 15)) >> 15;
+                    uint8_t rs2 = (instruction & (0b11111 << 20)) >> 20;
+
+                    CPU.regs[rd] = CPU.regs[rs1] & CPU.regs[rs2];
+                    printf("> AND executed\n");
+                    break;
+                }
+
                 default:{
                     printf("[Err]: R-type operation NOT IMPLEMENTED YET\n");
                     break;
@@ -147,8 +212,72 @@ int main(){
         }
 
         case 0x13:{ //I type
-            
-            break; 
+
+            //get the 3 bit differentiator
+            uint8_t operation = (instruction & (0b111 << 12)) >> 12;
+
+            switch (operation){
+
+                case 0x00:{ //ADDI
+                    uint8_t rd = (instruction & (0b11111 << 7)) >> 7;
+                    uint8_t rs1 = (instruction & (0b11111 << 15)) >> 15;
+                    //immediate is stored in bits [31:20], sign-extended to 64 bits
+                    int64_t imm = (int64_t)((int32_t)instruction >> 20);
+
+                    CPU.regs[rd] = CPU.regs[rs1] + imm;
+                    printf("> ADDI executed\n");
+                    break;
+                }
+
+                default:{
+                    printf("[Err]: I-type operation NOT IMPLEMENTED YET\n");
+                    break;
+                }
+            }
+
+            break;
+        }
+
+        case 0x63:{//B type (branches)
+
+            uint8_t operation = (uint8_t)((instruction & ((uint32_t)(0b111) << 12)) >> 12);
+            uint8_t rs1 = (uint8_t)((instruction & ((uint32_t)(0b11111) << 15)) >> 15);
+            uint8_t rs2 = (uint8_t)((instruction & ((uint32_t)(0b11111) << 20)) >> 20);
+
+            //the 12 bit offset value is stored across bits in this encoding so lets reassemble that
+            //imm[0] is always 0 since the offsets are implied to be 2 byte aligned (why? I dunno? quirk of hardware ig)
+            int64_t offset = ((int64_t)((int32_t)instruction >> 31) << 12)  // imm[12], sign-extended
+               | (((instruction >>  7) & 0x1)  << 11)           // imm[11]
+               | (((instruction >> 25) & 0x3F) <<  5)           // imm[10:5]
+               | (((instruction >>  8) & 0xF)  <<  1);          // imm[4:1]
+
+
+            switch (operation)
+            {
+            case 0x01:{ //BNE branch if not equal
+                if(CPU.regs[rs1] != CPU.regs[rs2]){
+                    //branch
+                    CPU.PC = (CPU.PC - 4) + offset; //since earlier we increment PC, to change where PC starts after the branch we need to get the address of the branch instruction itself
+                }
+                printf("> BNE Complete\n");
+                break;
+            }
+
+            case 0x0:{//BEQ
+                if(CPU.regs[rs1] == CPU.regs[rs2]){
+                    //branch
+                    CPU.PC = (CPU.PC - 4) + offset; //since earlier we increment PC, to change where PC starts after the branch we need to get the address of the branch instruction itself
+                }
+                printf("> BEQ Complete\n");
+                break;
+            }
+
+            default:
+                printf("[Err]: B-type operation not implemented yet\n");
+                break;
+            }
+
+            break;
         }
 
         //CSR operations as per ZICSR Extension
@@ -298,12 +427,19 @@ int main(){
 
         //EXECUTE (+ EVAL ADRESSES)
        
-    
+        //----TESTING-----// //REMOVE AFTER IMPLEMENTING ECALL
+        if(CPU.PC == prevPC){
+            //this means the program has entered a infinite loop and so we end the process and break out of the processor loop
+            printf("[WARNING]: INFINITE LOOP\n");
+            break;
+        }
 
+        prevPC = CPU.PC;
 
     }
 
     DeInitBUS(CPU.bus);
+    printf("***Final State of Registers:***\n");
     dump_regs(&CPU);
 
     return 0;
