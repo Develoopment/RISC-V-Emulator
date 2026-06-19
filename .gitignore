@@ -1,3 +1,5 @@
 riscv-gnu-toolchain/
 .claude/
 .vscode/
+*.o
+*.elf
